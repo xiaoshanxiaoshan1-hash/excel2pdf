@@ -8,33 +8,25 @@ import img2pdf
 from PIL import Image
 import streamlit as st
 
-# A4 纸张尺寸（单位：点，1英寸=72点）
-# A4 = 210mm × 297mm，1mm ≈ 2.8346457点
-A4_WIDTH_PT = 595.276   # 210 * 72 / 25.4
-A4_HEIGHT_PT = 841.890  # 297 * 72 / 25.4
+# A4 尺寸（点）
+A4_WIDTH_PT  = 595.276
+A4_HEIGHT_PT = 841.890
 
 def sheet_to_pdf(df):
-    """将单个 DataFrame 转换为 A4 单页 PDF 的字节流"""
-    # 强制所有单元格内容转为纯字符串，避免数据类型冲突
+    """将非空 DataFrame 转换为 A4 单页 PDF"""
     raw = df.values.tolist()
     data = [[str(cell) for cell in row] for row in raw]
 
     nrows = len(data)
     ncols = len(data[0]) if nrows > 0 else 0
 
-    if nrows == 0 or ncols == 0:
-        return img2pdf.convert(
-            [],
-            layout_fun=img2pdf.get_layout_fun(pagesize=(A4_WIDTH_PT, A4_HEIGHT_PT))
-        )
-
-    # 自适应字体大小
+    # 该函数保证不会接到空表，所以 nrows 和 ncols 均 >0
     font_size_w = (8.27 * 72) / ncols / 0.6
     font_size_h = (11.69 * 72) / nrows / 1.2
     font_size = min(font_size_w, font_size_h, 12)
     font_size = max(font_size, 4)
 
-    fig, ax = plt.subplots(figsize=(8.27, 11.69))  # 英寸
+    fig, ax = plt.subplots(figsize=(8.27, 11.69))
     ax.axis("off")
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
@@ -55,7 +47,6 @@ def sheet_to_pdf(df):
         plt.close(fig)
     buf.seek(0)
 
-    # PNG → PDF（直接使用 A4 尺寸的布局函数）
     image = Image.open(buf)
     if image.mode in ("RGBA", "LA", "P"):
         rgb_image = Image.new("RGB", image.size, (255, 255, 255))
@@ -72,15 +63,20 @@ def sheet_to_pdf(df):
 
 
 def excel_to_pdfs(file_bytes, base_name):
-    """一个 Excel 文件 → 多个 PDF（按工作表分开）"""
+    """一个 Excel → 多个 PDF（跳过空工作表）"""
     xls = pd.ExcelFile(io.BytesIO(file_bytes))
     sheet_names = xls.sheet_names
     pdfs = {}
+    skipped = []
 
     for sheet in sheet_names:
-        df = pd.read_excel(
-            xls, sheet_name=sheet, header=None, dtype=str, keep_default_na=False
-        )
+        df = pd.read_excel(xls, sheet_name=sheet, header=None,
+                           dtype=str, keep_default_na=False)
+        # 跳过空表（例如 WPS 的图片列表隐藏工作表）
+        if df.empty or df.size == 0:
+            skipped.append(sheet)
+            continue
+
         try:
             pdf_bytes = sheet_to_pdf(df)
         except Exception as e:
@@ -89,10 +85,10 @@ def excel_to_pdfs(file_bytes, base_name):
         pdf_name = f"{base_name}_{sheet}.pdf" if len(sheet_names) > 1 else f"{base_name}.pdf"
         pdfs[pdf_name] = pdf_bytes
 
-    return pdfs
+    return pdfs, skipped
 
 
-# Streamlit 界面
+# -------------------- Streamlit 界面 --------------------
 st.set_page_config(page_title="Excel → A4 PDF")
 st.title("📄 Excel 批量转 A4 单页 PDF")
 st.markdown(
@@ -110,20 +106,37 @@ if uploaded_files:
     if st.button("🚀 开始转换"):
         with st.spinner("转换中…"):
             zip_buffer = io.BytesIO()
+            all_skipped = {}
+
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for file in uploaded_files:
                     try:
                         name_no_ext = os.path.splitext(file.name)[0]
-                        pdfs = excel_to_pdfs(file.read(), name_no_ext)
+                        pdfs, skipped = excel_to_pdfs(file.read(), name_no_ext)
                         for pdf_name, pdf_data in pdfs.items():
                             zf.writestr(pdf_name, pdf_data)
+                        if skipped:
+                            all_skipped[file.name] = skipped
                     except Exception as e:
                         st.error(f"❌ {file.name}\n{e}")
+
             zip_buffer.seek(0)
-            st.success("✅ 转换完成（有错误的文件已跳过）")
-            st.download_button(
-                "⬇️ 下载所有 PDF（ZIP）",
-                data=zip_buffer,
-                file_name="excel_pdfs.zip",
-                mime="application/zip",
-            )
+
+            # 提示跳过的空工作表
+            if all_skipped:
+                msg = "⚠️ 以下空工作表已被跳过：\n"
+                for fname, sheets in all_skipped.items():
+                    msg += f"- {fname}: {', '.join(sheets)}\n"
+                st.warning(msg)
+
+            # 检查是否至少生成了一个 PDF
+            if zipfile.ZipFile(zip_buffer).namelist():
+                st.success("✅ 转换完成")
+                st.download_button(
+                    "⬇️ 下载所有 PDF（ZIP）",
+                    data=zip_buffer,
+                    file_name="excel_pdfs.zip",
+                    mime="application/zip",
+                )
+            else:
+                st.error("❌ 所有工作表均为空，未生成任何 PDF。")
