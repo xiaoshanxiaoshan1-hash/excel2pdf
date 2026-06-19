@@ -5,6 +5,7 @@ import zipfile
 import subprocess
 import tempfile
 import traceback
+import openpyxl               # ← 添加这一行
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
