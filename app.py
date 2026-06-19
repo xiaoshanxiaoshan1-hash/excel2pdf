@@ -4,6 +4,10 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 import streamlit as st
 
+# ==================== 可调参数 ====================
+SCALE_PERCENT = 67          # 缩放比例（若仍超宽可改小，如 50）
+MARGIN_INCHES = 0.2         # 页边距（英寸）
+
 # ==================== 页面优化 ====================
 def get_last_data_column(ws):
     """返回最后一个包含数据的列号（1-based）"""
@@ -16,29 +20,36 @@ def get_last_data_column(ws):
                 return col
     return 1
 
-def set_print_optimize(workbook):
-    """设置打印区域、窄边距、A4 纸张、强制一页宽"""
+def clean_and_set_print(workbook):
+    """清理分页符，设置缩放、窄边距、A4，限定打印区域"""
     for ws in workbook.worksheets:
-        # 1. 打印区域仅包含数据列
+        # 1. 清除所有水平/垂直分页符
+        ws.page_breaks.horizontal_breaks = []
+        ws.page_breaks.vertical_breaks = []
+        ws.page_breaks.row = 0
+        ws.page_breaks.col = 0
+
+        # 2. 设置打印区域（只包含有数据的列）
         last_col = get_last_data_column(ws)
         max_row = ws.max_row or 1
         col_letter = get_column_letter(last_col)
         ws.print_area = f'A1:{col_letter}{max_row}'
 
-        # 2. 极窄页边距（单位：英寸）
-        ws.page_margins.left = 0.2
-        ws.page_margins.right = 0.2
-        ws.page_margins.top = 0.2
-        ws.page_margins.bottom = 0.2
+        # 3. 极窄页边距
+        ws.page_margins.left = MARGIN_INCHES
+        ws.page_margins.right = MARGIN_INCHES
+        ws.page_margins.top = MARGIN_INCHES
+        ws.page_margins.bottom = MARGIN_INCHES
         ws.page_margins.header = 0.0
         ws.page_margins.footer = 0.0
 
-        # 3. 纸张大小：A4 (9)
+        # 4. 纸张大小：A4 (9)
         ws.page_setup.paperSize = 9
 
-        # 4. 强制所有列在一页（高度不限制）
-        ws.page_setup.fitToWidth = 1
-        ws.page_setup.fitToHeight = 0   # 0 表示不限制，高度自动适配
+        # 5. 固定缩放比例（不依赖 fitToWidth，避免被文件原有设置覆盖）
+        ws.page_setup.scale = SCALE_PERCENT
+        ws.page_setup.fitToWidth = 0
+        ws.page_setup.fitToHeight = 0
 
 # ==================== LibreOffice 转换 ====================
 def get_soffice_path():
@@ -57,15 +68,15 @@ def convert_with_libreoffice(file_bytes, base_name):
     if not soffice:
         raise RuntimeError("❌ 未找到 LibreOffice，请确认已安装")
 
-    # 修改 Excel 页面设置
+    # 用 openpyxl 重新保存文件，洗掉微信只读等特殊属性
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    set_print_optimize(wb)
+    clean_and_set_print(wb)
     modified_bytes = io.BytesIO()
     wb.save(modified_bytes)
     wb.close()
     modified_bytes.seek(0)
 
-    # 用 LibreOffice 转 PDF
+    # 再用 LibreOffice 转 PDF
     with tempfile.TemporaryDirectory() as tmpdir:
         xlsx_path = os.path.join(tmpdir, f'{base_name}.xlsx')
         with open(xlsx_path, 'wb') as f:
@@ -89,7 +100,7 @@ def get_sheet_names(file_bytes):
     return names
 
 def split_pdf_pages(pdf_bytes, base_name, sheet_names):
-    """拆分多页 PDF，用工作表名命名（每个工作表应只有 1 页）"""
+    """拆分多页 PDF，用工作表名命名"""
     try:
         from PyPDF2 import PdfReader, PdfWriter
     except ImportError:
@@ -111,10 +122,11 @@ def split_pdf_pages(pdf_bytes, base_name, sheet_names):
 
 # ==================== Streamlit 界面 ====================
 st.set_page_config(page_title='Excel → A4 单页 PDF')
-st.title('📄 Excel 批量转 A4 单页 PDF（智能打印）')
+st.title('📄 Excel 批量转 A4 单页 PDF（固定缩放）')
 st.markdown(
-    '✅ 自动检测数据列，极窄边距，强制所有列在一页 A4 内。\n'
-    '**每个工作表生成唯一一个 PDF，不再分页**'
+    f'✅ 清除分页符，固定缩放 **{SCALE_PERCENT}%**，极窄边距，只打印有内容的列。\n'
+    '**每个工作表生成唯一一个 PDF，所有列一定在同一页。**\n'
+    '（若仍超宽，可将代码中的 `SCALE_PERCENT` 改小，例如 50）'
 )
 
 uploaded_files = st.file_uploader('选择 Excel 文件', type=['xlsx','xls'], accept_multiple_files=True)
