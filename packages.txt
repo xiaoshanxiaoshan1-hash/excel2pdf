@@ -1,2 +1,2 @@
-libreoffice-writer
-fonts-noto-cjk
+libreoffice-calc
+fonts-wqy-zenhei
