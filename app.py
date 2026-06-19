@@ -4,10 +4,6 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 import streamlit as st
 
-# ==================== 可调参数 ====================
-SCALE_PERCENT = 67          # 缩放比例（若仍超宽可改小，如 50）
-MARGIN_INCHES = 0.2         # 页边距（英寸）
-
 # ==================== 页面优化 ====================
 def get_last_data_column(ws):
     """返回最后一个包含数据的列号（1-based）"""
@@ -20,34 +16,34 @@ def get_last_data_column(ws):
                 return col
     return 1
 
-def clean_and_set_print(workbook):
-    """清理分页符，设置缩放、窄边距、A4，限定打印区域"""
+def clean_and_set_print(workbook, scale_percent):
+    """清除分页符、设置缩放、窄边距、打印区域"""
     for ws in workbook.worksheets:
-        # 1. 清除所有水平/垂直分页符
-        ws.page_breaks.horizontal_breaks = []
-        ws.page_breaks.vertical_breaks = []
-        ws.page_breaks.row = 0
-        ws.page_breaks.col = 0
+        # 1. 清除所有分页符（正确属性名）
+        if ws.row_breaks:
+            ws.row_breaks.break_list.clear()
+        if ws.col_breaks:
+            ws.col_breaks.break_list.clear()
 
-        # 2. 设置打印区域（只包含有数据的列）
+        # 2. 打印区域（仅数据列）
         last_col = get_last_data_column(ws)
         max_row = ws.max_row or 1
         col_letter = get_column_letter(last_col)
         ws.print_area = f'A1:{col_letter}{max_row}'
 
-        # 3. 极窄页边距
-        ws.page_margins.left = MARGIN_INCHES
-        ws.page_margins.right = MARGIN_INCHES
-        ws.page_margins.top = MARGIN_INCHES
-        ws.page_margins.bottom = MARGIN_INCHES
+        # 3. 极窄页边距（英寸）
+        ws.page_margins.left = 0.2
+        ws.page_margins.right = 0.2
+        ws.page_margins.top = 0.2
+        ws.page_margins.bottom = 0.2
         ws.page_margins.header = 0.0
         ws.page_margins.footer = 0.0
 
-        # 4. 纸张大小：A4 (9)
+        # 4. 纸张 A4
         ws.page_setup.paperSize = 9
 
-        # 5. 固定缩放比例（不依赖 fitToWidth，避免被文件原有设置覆盖）
-        ws.page_setup.scale = SCALE_PERCENT
+        # 5. 固定缩放（由用户指定）
+        ws.page_setup.scale = scale_percent
         ws.page_setup.fitToWidth = 0
         ws.page_setup.fitToHeight = 0
 
@@ -63,20 +59,18 @@ def get_soffice_path():
             return p
     return None
 
-def convert_with_libreoffice(file_bytes, base_name):
+def convert_with_libreoffice(file_bytes, base_name, scale_percent):
     soffice = get_soffice_path()
     if not soffice:
         raise RuntimeError("❌ 未找到 LibreOffice，请确认已安装")
 
-    # 用 openpyxl 重新保存文件，洗掉微信只读等特殊属性
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    clean_and_set_print(wb)
+    clean_and_set_print(wb, scale_percent)
     modified_bytes = io.BytesIO()
     wb.save(modified_bytes)
     wb.close()
     modified_bytes.seek(0)
 
-    # 再用 LibreOffice 转 PDF
     with tempfile.TemporaryDirectory() as tmpdir:
         xlsx_path = os.path.join(tmpdir, f'{base_name}.xlsx')
         with open(xlsx_path, 'wb') as f:
@@ -100,7 +94,6 @@ def get_sheet_names(file_bytes):
     return names
 
 def split_pdf_pages(pdf_bytes, base_name, sheet_names):
-    """拆分多页 PDF，用工作表名命名"""
     try:
         from PyPDF2 import PdfReader, PdfWriter
     except ImportError:
@@ -122,17 +115,17 @@ def split_pdf_pages(pdf_bytes, base_name, sheet_names):
 
 # ==================== Streamlit 界面 ====================
 st.set_page_config(page_title='Excel → A4 单页 PDF')
-st.title('📄 Excel 批量转 A4 单页 PDF（固定缩放）')
-st.markdown(
-    f'✅ 清除分页符，固定缩放 **{SCALE_PERCENT}%**，极窄边距，只打印有内容的列。\n'
-    '**每个工作表生成唯一一个 PDF，所有列一定在同一页。**\n'
-    '（若仍超宽，可将代码中的 `SCALE_PERCENT` 改小，例如 50）'
-)
+st.title('📄 Excel 批量转 A4 单页 PDF（可调缩放）')
+st.markdown('清除分页符、窄边距，**用户可指定缩放比例**，确保所有列在一页。')
+
+# 让同事自己调整缩放（默认 50%，范围 30% ~ 100%）
+scale = st.slider('缩放比例 (%)', min_value=30, max_value=100, value=50, step=5,
+                  help='如果表格很宽，可以把比例调小，比如 40% 甚至 30%')
 
 uploaded_files = st.file_uploader('选择 Excel 文件', type=['xlsx','xls'], accept_multiple_files=True)
 
 if uploaded_files and st.button('🚀 开始转换'):
-    with st.spinner('转换中…'):
+    with st.spinner(f'转换中（缩放 {scale}%）…'):
         zip_buf = io.BytesIO()
         total_pdfs = 0
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -141,7 +134,7 @@ if uploaded_files and st.button('🚀 开始转换'):
                     raw = f.read()
                     name_no_ext = os.path.splitext(f.name)[0]
                     sheet_names = get_sheet_names(raw)
-                    pdf_bytes = convert_with_libreoffice(raw, name_no_ext)
+                    pdf_bytes = convert_with_libreoffice(raw, name_no_ext, scale)
                     pdfs = split_pdf_pages(pdf_bytes, name_no_ext, sheet_names)
                     for pname, pdata in pdfs.items():
                         zf.writestr(pname, pdata)
