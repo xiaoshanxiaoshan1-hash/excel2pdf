@@ -83,11 +83,15 @@ st.markdown("""
 def apply_fixed_scaling(workbook, scale_percent, orientation):
     """固定缩放 + 居中 + 页面方向 + 窄边距"""
     for ws in workbook.worksheets:
-        # 清除分页符
-        if ws.row_breaks:
-            ws.row_breaks.break_list.clear()
-        if ws.col_breaks:
-            ws.col_breaks.break_list.clear()
+        # ✅ 修正清除分页符的方法
+        try:
+            ws.row_breaks.clear()
+        except AttributeError:
+            ws.row_breaks = openpyxl.worksheet.pagebreak.Break()
+        try:
+            ws.col_breaks.clear()
+        except AttributeError:
+            ws.col_breaks = openpyxl.worksheet.pagebreak.Break()
 
         # 页边距
         ws.page_margins.left = 0.3
@@ -104,7 +108,7 @@ def apply_fixed_scaling(workbook, scale_percent, orientation):
         # 纸张 A4
         ws.page_setup.paperSize = 9
 
-        # 页面方向：portrait / landscape
+        # 页面方向
         ws.page_setup.orientation = orientation
 
         # 固定缩放（关闭自适应）
@@ -157,7 +161,6 @@ t = LANG[lang]
 st.title(t['title'])
 st.markdown(t['desc'])
 
-# 缩放比例输入
 scale = st.number_input(
     t['scale_label'],
     min_value=30,
@@ -167,7 +170,6 @@ scale = st.number_input(
     help=t['scale_help']
 )
 
-# 页面方向选择
 orientation = st.radio(
     t['orientation_label'],
     options=['portrait', 'landscape'],
@@ -175,7 +177,7 @@ orientation = st.radio(
     format_func=lambda x: t['orientation_portrait'] if x == 'portrait' else t['orientation_landscape']
 )
 
-# 文件上传（带清除功能）
+# 清除按钮
 if 'clear_counter' not in st.session_state:
     st.session_state.clear_counter = 0
 
@@ -190,7 +192,6 @@ uploaded_files = st.file_uploader(
     key=f"file_uploader_{st.session_state.clear_counter}"
 )
 
-# 转换
 if uploaded_files and st.button(t['button']):
     with st.spinner(t['spinner'].format(scale=scale)):
         zip_buf = io.BytesIO()
