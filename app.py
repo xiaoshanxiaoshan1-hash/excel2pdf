@@ -4,43 +4,28 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 import streamlit as st
 
-def set_print_area_to_data(ws):
-    """将工作表的打印区域设为从第1列到最右非空列"""
+def get_last_data_column(ws):
+    """返回最后一个包含数据的列号（1-based）"""
     max_col = ws.max_column
-    if max_col is None or max_col == 0:
-        return
-
-    # 从最右向左找到第一个非空列（避免中间空列截断）
-    last_data_col = 1
+    if max_col is None:
+        return 1
     for col in range(max_col, 0, -1):
         for row in ws.iter_rows(min_col=col, max_col=col, values_only=True):
             if any(cell is not None and str(cell).strip() != '' for cell in row):
-                last_data_col = col
-                break
-        if last_data_col != 1:
-            break
+                return col
+    return 1
 
-    # 同样检查第一列（避免全是空列）
-    first_data_col = 1
-    for col in range(1, max_col + 1):
-        for row in ws.iter_rows(min_col=col, max_col=col, values_only=True):
-            if any(cell is not None and str(cell).strip() != '' for cell in row):
-                first_data_col = col
-                break
-        if first_data_col != 1:
-            break
-
-    # 设置打印区域（A列到 last_data_col 列）
-    ws.print_area = f'A{first_data_col}:{get_column_letter(last_data_col)}{ws.max_row or 1}'
-
-def set_fit_to_one_page(workbook):
-    """强制所有工作表缩放至 1 页宽 × 1 页高，并设置打印区域"""
+def set_print_area_and_fit(workbook):
+    """为每个工作表设置打印区域（仅包含数据列），并强制缩放到一页"""
     for ws in workbook.worksheets:
-        set_print_area_to_data(ws)
+        last_col = get_last_data_column(ws)
+        max_row = ws.max_row or 1
+        col_letter = get_column_letter(last_col)
+        # 打印区域：从 A1 到最后一列最后一行
+        ws.print_area = f'A1:{col_letter}{max_row}'
+        # 强制一页宽一页高
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 1
-        # 清除可能存在的缩放比例
-        ws.page_setup.scale = 100
 
 def get_soffice_path():
     paths = [
@@ -59,7 +44,7 @@ def convert_with_libreoffice(file_bytes, base_name):
         raise RuntimeError("❌ 未找到 LibreOffice，请确认已安装")
 
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    set_fit_to_one_page(wb)
+    set_print_area_and_fit(wb)
     modified_bytes = io.BytesIO()
     wb.save(modified_bytes)
     wb.close()
@@ -102,7 +87,11 @@ def split_pdf_pages(pdf_bytes, base_name, sheet_names):
         buf = io.BytesIO()
         writer.write(buf)
         buf.seek(0)
-        name = f'{base_name}_{sheet_names[i]}.pdf' if i < len(sheet_names) else f'{base_name}_page{i+1}.pdf'
+        # 如果页数多于工作表数，多出的页用数字命名
+        if i < len(sheet_names):
+            name = f'{base_name}_{sheet_names[i]}.pdf'
+        else:
+            name = f'{base_name}_page{i+1}.pdf'
         pdfs[name] = buf.read()
     return pdfs
 
@@ -111,7 +100,7 @@ st.set_page_config(page_title='Excel → A4 单页 PDF')
 st.title('📄 Excel 批量转 A4 单页 PDF（智能打印区域）')
 st.markdown(
     '✅ 自动检测数据列范围，只打印有内容的列，强制缩放至一张 A4 纸。\n'
-    '**合并单元格、边框等格式完美保留**'
+    '**每个工作表生成一个 PDF，不会出现多页拆分**'
 )
 
 uploaded_files = st.file_uploader('选择 Excel 文件', type=['xlsx','xls'], accept_multiple_files=True)
