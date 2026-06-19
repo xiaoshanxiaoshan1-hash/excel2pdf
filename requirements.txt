@@ -1,1 +1,7 @@
-libreoffice
+streamlit
+pandas
+openpyxl
+matplotlib
+img2pdf
+Pillow
+PyPDF2
