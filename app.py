@@ -1,6 +1,7 @@
 import io
 import os
 import zipfile
+import traceback
 import pandas as pd
 import matplotlib.pyplot as plt
 import img2pdf
@@ -9,17 +10,19 @@ import streamlit as st
 
 def sheet_to_pdf(df):
     """将单个 DataFrame 转换为 A4 单页 PDF 的字节流"""
-    data = df.astype(str).values.tolist()
+    # ★ 确保所有单元格内容都是纯粹的字符串，避免类型混用
+    raw = df.values.tolist()
+    data = [[str(cell) for cell in row] for row in raw]
+
     nrows = len(data)
     ncols = len(data[0]) if nrows > 0 else 0
 
     if nrows == 0 or ncols == 0:
-        # 空表 → 空白 A4 PDF
         return img2pdf.convert(
             [], layout_fun=img2pdf.get_layout_fun(pagesize="A4")
         )
 
-    # 根据行列数自动估算字体大小（点）
+    # 自适应字体大小
     font_size_w = (8.27 * 72) / ncols / 0.6
     font_size_h = (11.69 * 72) / nrows / 1.2
     font_size = min(font_size_w, font_size_h, 12)
@@ -29,25 +32,26 @@ def sheet_to_pdf(df):
     ax.axis("off")
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
-    # 表格铺满整个 axes
     table = ax.table(cellText=data, bbox=[0, 0, 1, 1])
     table.auto_set_font_size(False)
     table.set_fontsize(font_size)
 
-    # 强制单元格等宽等高，均匀分布
+    # 均匀分布行列
     for key, cell in table.get_celld().items():
         cell.set_width(1.0 / ncols)
         cell.set_height(1.0 / nrows)
         cell.set_linewidth(0.3)
         cell.set_text_props(ha="center", va="center")
 
-    # 先输出为高分辨率 PNG
+    # 渲染为高分辨率 PNG
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=200, pad_inches=0, bbox_inches="tight")
-    plt.close(fig)
+    try:
+        fig.savefig(buf, format="png", dpi=200, pad_inches=0, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     buf.seek(0)
 
-    # 转为 A4 PDF（自动缩放填满整页）
+    # PNG → A4 PDF
     image = Image.open(buf)
     if image.mode in ("RGBA", "LA", "P"):
         rgb_image = Image.new("RGB", image.size, (255, 255, 255))
@@ -66,19 +70,24 @@ def sheet_to_pdf(df):
 
 
 def excel_to_pdfs(file_bytes, base_name):
-    """将一个 Excel 文件的所有工作表分别转为 PDF，返回 {文件名: PDF字节}"""
+    """一个 Excel 文件 → 多个 PDF（一个工作表一个文件）"""
     xls = pd.ExcelFile(io.BytesIO(file_bytes))
     sheet_names = xls.sheet_names
     pdfs = {}
 
     for sheet in sheet_names:
-        df = pd.read_excel(xls, sheet_name=sheet, header=None, dtype=str, keep_default_na=False)
-        pdf_bytes = sheet_to_pdf(df)
+        # header=None 保证不丢失首行；dtype=str 把数据当作文本
+        df = pd.read_excel(
+            xls, sheet_name=sheet, header=None, dtype=str, keep_default_na=False
+        )
+        try:
+            pdf_bytes = sheet_to_pdf(df)
+        except Exception as e:
+            # 输出完整错误栈，便于定位问题
+            err_msg = f"{e}\n{traceback.format_exc()}"
+            raise RuntimeError(f"工作表 “{sheet}” 转换失败:\n{err_msg}")
 
-        if len(sheet_names) == 1:
-            pdf_name = f"{base_name}.pdf"
-        else:
-            pdf_name = f"{base_name}_{sheet}.pdf"
+        pdf_name = f"{base_name}_{sheet}.pdf" if len(sheet_names) > 1 else f"{base_name}.pdf"
         pdfs[pdf_name] = pdf_bytes
 
     return pdfs
@@ -110,9 +119,10 @@ if uploaded_files:
                         for pdf_name, pdf_data in pdfs.items():
                             zf.writestr(pdf_name, pdf_data)
                     except Exception as e:
-                        st.error(f"❌ {file.name} 转换失败: {e}")
+                        st.error(f"❌ {file.name}\n{e}")
+                        # 即使某个文件失败也继续处理剩余文件
             zip_buffer.seek(0)
-            st.success("✅ 转换完成！")
+            st.success("✅ 转换完成（有错误的文件已跳过）")
             st.download_button(
                 "⬇️ 下载所有 PDF（ZIP）",
                 data=zip_buffer,
