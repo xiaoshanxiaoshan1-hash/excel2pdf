@@ -16,17 +16,15 @@ import streamlit as st
 A4_WIDTH_PT  = 595.276
 A4_HEIGHT_PT = 841.890
 
-# 设置 matplotlib 中文字体（优先使用 Noto Sans CJK）
+# 设置 matplotlib 中文字体
 def set_chinese_font():
     try:
-        # 尝试使用系统安装的 Noto CJK 字体
         font_path = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
         if os.path.exists(font_path):
             from matplotlib.font_manager import FontProperties
             font_prop = FontProperties(fname=font_path)
             matplotlib.rcParams['font.family'] = font_prop.get_name()
         else:
-            # 退回到 sans-serif 并指定字体列表
             matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'SimHei', 'DejaVu Sans']
             matplotlib.rcParams['axes.unicode_minus'] = False
     except:
@@ -34,7 +32,7 @@ def set_chinese_font():
 
 set_chinese_font()
 
-# ==================== LibreOffice 部分 ====================
+# ==================== LibreOffice 检测 ====================
 def get_soffice_path():
     paths = [
         '/usr/bin/soffice',
@@ -46,23 +44,28 @@ def get_soffice_path():
             return p
     return None
 
-def use_libreoffice():
-    """检查 LibreOffice 是否可用"""
-    return get_soffice_path() is not None
-
-def convert_with_libreoffice(file_bytes, base_name):
+def try_libreoffice(file_bytes, base_name):
+    """尝试用 LibreOffice 转换，失败则返回 None"""
     soffice = get_soffice_path()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path = os.path.join(tmpdir, f'{base_name}.xlsx')
-        with open(xlsx_path, 'wb') as f:
-            f.write(file_bytes)
-        subprocess.run(
-            [soffice, '--headless', '--convert-to', 'pdf', '--outdir', tmpdir, xlsx_path],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        pdf_path = os.path.join(tmpdir, f'{base_name}.pdf')
-        with open(pdf_path, 'rb') as f:
-            return f.read()
+    if not soffice:
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xlsx_path = os.path.join(tmpdir, f'{base_name}.xlsx')
+            with open(xlsx_path, 'wb') as f:
+                f.write(file_bytes)
+            subprocess.run(
+                [soffice, '--headless', '--convert-to', 'pdf', '--outdir', tmpdir, xlsx_path],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=30
+            )
+            pdf_path = os.path.join(tmpdir, f'{base_name}.pdf')
+            if os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as f:
+                    return f.read()
+    except Exception:
+        pass
+    return None
 
 def get_sheet_names(file_bytes):
     import openpyxl
@@ -155,29 +158,38 @@ def sheet_to_pdf_matplotlib(df, col_widths=None):
 # ==================== Streamlit 界面 ====================
 st.set_page_config(page_title='Excel → A4 PDF')
 st.title('📄 Excel 批量转 A4 单页 PDF')
-st.markdown('每个工作表生成一个 PDF，内容自动缩放。**优先使用 LibreOffice 完美打印**，否则用 matplotlib（已支持中文）。')
+st.markdown('每个工作表生成一个 PDF，自动缩放。**优先使用 LibreOffice 完美打印**，否则自动回退到 matplotlib（已支持中文）。')
 
 uploaded_files = st.file_uploader('选择 Excel 文件', type=['xlsx','xls'], accept_multiple_files=True)
 
 if uploaded_files and st.button('🚀 开始转换'):
-    with st.spinner('转换中...'):
+    with st.spinner('转换中…'):
         zip_buf = io.BytesIO()
-        file_data = {f.name: io.BytesIO(f.read()) for f in uploaded_files}
         total_pdfs = 0
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for fname, buf in file_data.items():
-                try:
-                    buf.seek(0)
-                    raw = buf.read()
-                    name_no_ext = os.path.splitext(fname)[0]
-                    sheet_names = get_sheet_names(raw)
+        # 尝试一次 LibreOffice，标记是否可用
+        libre_available = get_soffice_path() is not None
+        if not libre_available:
+            st.info('ℹ️ LibreOffice 未安装，使用 matplotlib 转换（带中文支持）。')
 
-                    # 优先使用 LibreOffice
-                    if use_libreoffice():
-                        pdf_bytes = convert_with_libreoffice(raw, name_no_ext)
-                        pdfs = split_pdf_pages(pdf_bytes, name_no_ext, sheet_names)
-                    else:
-                        # 回退到 matplotlib（读取列宽）
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for f in uploaded_files:
+                try:
+                    raw = f.read()
+                    name_no_ext = os.path.splitext(f.name)[0]
+                    sheet_names = get_sheet_names(raw)
+                    pdfs = {}
+
+                    if libre_available:
+                        # 尝试 LibreOffice，失败则回退
+                        pdf_bytes = try_libreoffice(raw, name_no_ext)
+                        if pdf_bytes is not None:
+                            pdfs = split_pdf_pages(pdf_bytes, name_no_ext, sheet_names)
+                        else:
+                            libre_available = False  # 标记不可用，后续文件直接用 matplotlib
+                            st.warning(f'⚠️ LibreOffice 转换失败，回退到 matplotlib')
+
+                    if not libre_available or not pdfs:
+                        # matplotlib 回退
                         col_widths = get_column_widths_from_excel(raw)
                         xls = pd.ExcelFile(io.BytesIO(raw))
                         pdfs = {}
@@ -186,7 +198,7 @@ if uploaded_files and st.button('🚀 开始转换'):
                             if df.empty or df.size == 0:
                                 continue
                             pdf_bytes = sheet_to_pdf_matplotlib(df, col_widths)
-                            pdf_name = f'{name_no_ext}_{sheet}.pdf' if len(sheet_names)>1 else f'{name_no_ext}.pdf'
+                            pdf_name = f'{name_no_ext}_{sheet}.pdf' if len(sheet_names) > 1 else f'{name_no_ext}.pdf'
                             pdfs[pdf_name] = pdf_bytes
                         xls.close()
 
@@ -194,7 +206,7 @@ if uploaded_files and st.button('🚀 开始转换'):
                         zf.writestr(pname, pdata)
                         total_pdfs += 1
                 except Exception as e:
-                    st.error(f'❌ {fname}\n{e}\n{traceback.format_exc()}')
+                    st.error(f'❌ {f.name}\n{e}\n{traceback.format_exc()}')
         zip_buf.seek(0)
         if total_pdfs > 0:
             st.success(f'✅ 转换完成，共生成 {total_pdfs} 个 PDF')
