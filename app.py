@@ -3,26 +3,30 @@ import openpyxl
 import streamlit as st
 
 def apply_fixed_scaling(workbook, scale_percent):
-    """只使用固定缩放，关闭自适应，窄边距，清除分页符"""
+    """固定缩放 + 居中 + 窄边距"""
     for ws in workbook.worksheets:
-        # 1. 清空所有分页符
+        # 清除分页符
         if ws.row_breaks:
             ws.row_breaks.break_list.clear()
         if ws.col_breaks:
             ws.col_breaks.break_list.clear()
 
-        # 2. 极窄边距（0.1 英寸 ≈ 2.5mm）
-        ws.page_margins.left = 0.1
-        ws.page_margins.right = 0.1
-        ws.page_margins.top = 0.1
-        ws.page_margins.bottom = 0.1
+        # 页边距：上下左右各 0.3 英寸（约 7.6mm）
+        ws.page_margins.left = 0.3
+        ws.page_margins.right = 0.3
+        ws.page_margins.top = 0.3
+        ws.page_margins.bottom = 0.3
         ws.page_margins.header = 0.0
         ws.page_margins.footer = 0.0
 
-        # 3. 纸张 A4
+        # 水平、垂直居中
+        ws.page_setup.horizontalCentered = True
+        ws.page_setup.verticalCentered = True
+
+        # 纸张 A4
         ws.page_setup.paperSize = 9
 
-        # 4. ⚠️ 关键：完全关闭自适应，只用固定缩放
+        # 固定缩放（关闭自适应）
         ws.page_setup.fitToWidth = 0
         ws.page_setup.fitToHeight = 0
         ws.page_setup.scale = scale_percent
@@ -43,7 +47,6 @@ def convert_with_libreoffice(file_bytes, base_name, scale):
     if not soffice:
         raise RuntimeError("❌ 未找到 LibreOffice，请确认已安装")
 
-    # 1. 修改 Excel 打印设置
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
     apply_fixed_scaling(wb, scale)
     modified_bytes = io.BytesIO()
@@ -51,7 +54,6 @@ def convert_with_libreoffice(file_bytes, base_name, scale):
     wb.close()
     modified_bytes.seek(0)
 
-    # 2. 用 LibreOffice 转 PDF
     with tempfile.TemporaryDirectory() as tmpdir:
         xlsx_path = os.path.join(tmpdir, f'{base_name}.xlsx')
         with open(xlsx_path, 'wb') as f:
@@ -68,13 +70,12 @@ def convert_with_libreoffice(file_bytes, base_name, scale):
             return f.read()
 
 # ==================== Streamlit 界面 ====================
-st.set_page_config(page_title='Excel → A4 PDF（固定缩放）')
-st.title('📄 Excel 批量转 A4 PDF（缩放可调）')
-st.markdown('每个 Excel 生成一个 PDF（多工作表合成一个文件），**所有列缩放至一页**。')
+st.set_page_config(page_title='Excel → A4 PDF')
+st.title('📄 Excel 批量转 A4 PDF（缩放可调 + 居中）')
+st.markdown('每个 Excel 生成一个 PDF，**内容居中**，所有列缩放至一页。')
 
-# 让同事自己拖拽缩放比例（默认 67%）
 scale = st.slider('缩放比例 (%)', min_value=30, max_value=100, value=67, step=1,
-                  help='数字越小，内容越小，越容易装下所有列。若表格很宽可调至 50% 或更低')
+                  help='数字越小，内容越小，越容易装下所有列。')
 
 uploaded_files = st.file_uploader('选择 Excel 文件', type=['xlsx','xls'], accept_multiple_files=True)
 
