@@ -1,4 +1,2 @@
-streamlit
-pandas
-openpyxl
-PyPDF2
+libreoffice-calc
+fonts-wqy-zenhei
