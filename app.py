@@ -8,9 +8,14 @@ import img2pdf
 from PIL import Image
 import streamlit as st
 
+# A4 纸张尺寸（单位：点，1英寸=72点）
+# A4 = 210mm × 297mm，1mm ≈ 2.8346457点
+A4_WIDTH_PT = 595.276   # 210 * 72 / 25.4
+A4_HEIGHT_PT = 841.890  # 297 * 72 / 25.4
+
 def sheet_to_pdf(df):
     """将单个 DataFrame 转换为 A4 单页 PDF 的字节流"""
-    # ★ 确保所有单元格内容都是纯粹的字符串，避免类型混用
+    # 强制所有单元格内容转为纯字符串，避免数据类型冲突
     raw = df.values.tolist()
     data = [[str(cell) for cell in row] for row in raw]
 
@@ -19,7 +24,8 @@ def sheet_to_pdf(df):
 
     if nrows == 0 or ncols == 0:
         return img2pdf.convert(
-            [], layout_fun=img2pdf.get_layout_fun(pagesize="A4")
+            [],
+            layout_fun=img2pdf.get_layout_fun(pagesize=(A4_WIDTH_PT, A4_HEIGHT_PT))
         )
 
     # 自适应字体大小
@@ -28,7 +34,7 @@ def sheet_to_pdf(df):
     font_size = min(font_size_w, font_size_h, 12)
     font_size = max(font_size, 4)
 
-    fig, ax = plt.subplots(figsize=(8.27, 11.69))
+    fig, ax = plt.subplots(figsize=(8.27, 11.69))  # 英寸
     ax.axis("off")
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
@@ -36,14 +42,12 @@ def sheet_to_pdf(df):
     table.auto_set_font_size(False)
     table.set_fontsize(font_size)
 
-    # 均匀分布行列
     for key, cell in table.get_celld().items():
         cell.set_width(1.0 / ncols)
         cell.set_height(1.0 / nrows)
         cell.set_linewidth(0.3)
         cell.set_text_props(ha="center", va="center")
 
-    # 渲染为高分辨率 PNG
     buf = io.BytesIO()
     try:
         fig.savefig(buf, format="png", dpi=200, pad_inches=0, bbox_inches="tight")
@@ -51,7 +55,7 @@ def sheet_to_pdf(df):
         plt.close(fig)
     buf.seek(0)
 
-    # PNG → A4 PDF
+    # PNG → PDF（直接使用 A4 尺寸的布局函数）
     image = Image.open(buf)
     if image.mode in ("RGBA", "LA", "P"):
         rgb_image = Image.new("RGB", image.size, (255, 255, 255))
@@ -62,30 +66,25 @@ def sheet_to_pdf(df):
     image.save(img_bytes, format="PNG")
     img_bytes.seek(0)
 
-    pdf_bytes = img2pdf.convert(
-        img_bytes.getvalue(),
-        layout_fun=img2pdf.get_layout_fun(pagesize="A4"),
-    )
+    layout = img2pdf.get_layout_fun(pagesize=(A4_WIDTH_PT, A4_HEIGHT_PT))
+    pdf_bytes = img2pdf.convert(img_bytes.getvalue(), layout_fun=layout)
     return pdf_bytes
 
 
 def excel_to_pdfs(file_bytes, base_name):
-    """一个 Excel 文件 → 多个 PDF（一个工作表一个文件）"""
+    """一个 Excel 文件 → 多个 PDF（按工作表分开）"""
     xls = pd.ExcelFile(io.BytesIO(file_bytes))
     sheet_names = xls.sheet_names
     pdfs = {}
 
     for sheet in sheet_names:
-        # header=None 保证不丢失首行；dtype=str 把数据当作文本
         df = pd.read_excel(
             xls, sheet_name=sheet, header=None, dtype=str, keep_default_na=False
         )
         try:
             pdf_bytes = sheet_to_pdf(df)
         except Exception as e:
-            # 输出完整错误栈，便于定位问题
-            err_msg = f"{e}\n{traceback.format_exc()}"
-            raise RuntimeError(f"工作表 “{sheet}” 转换失败:\n{err_msg}")
+            raise RuntimeError(f"工作表 “{sheet}” 转换失败:\n{e}\n{traceback.format_exc()}")
 
         pdf_name = f"{base_name}_{sheet}.pdf" if len(sheet_names) > 1 else f"{base_name}.pdf"
         pdfs[pdf_name] = pdf_bytes
@@ -93,7 +92,7 @@ def excel_to_pdfs(file_bytes, base_name):
     return pdfs
 
 
-# -------------------- Streamlit 界面 --------------------
+# Streamlit 界面
 st.set_page_config(page_title="Excel → A4 PDF")
 st.title("📄 Excel 批量转 A4 单页 PDF")
 st.markdown(
@@ -120,7 +119,6 @@ if uploaded_files:
                             zf.writestr(pdf_name, pdf_data)
                     except Exception as e:
                         st.error(f"❌ {file.name}\n{e}")
-                        # 即使某个文件失败也继续处理剩余文件
             zip_buffer.seek(0)
             st.success("✅ 转换完成（有错误的文件已跳过）")
             st.download_button(
