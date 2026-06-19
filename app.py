@@ -11,6 +11,7 @@ LANG = {
         'scale_help': '输入 30-100，表格越宽数值越小',
         'upload_label': '选择 Excel 文件',
         'button': '🚀 开始转换',
+        'clear_button': '🗑️ 一键清除所有文件',
         'spinner': '正在以 {scale}% 缩放转换…',
         'success': '✅ 转换完成，共 {count} 个 PDF',
         'download': '⬇️ 下载 ZIP',
@@ -25,6 +26,7 @@ LANG = {
         'scale_help': 'Enter 30-100, smaller for wider sheets',
         'upload_label': 'Choose Excel files',
         'button': '🚀 Convert',
+        'clear_button': '🗑️ Clear All Files',
         'spinner': 'Converting at {scale}% scale…',
         'success': '✅ Done! {count} PDF(s) generated.',
         'download': '⬇️ Download ZIP',
@@ -39,6 +41,7 @@ LANG = {
         'scale_help': 'ป้อน 30-100, ตารางกว้างใช้ค่าน้อย',
         'upload_label': 'เลือกไฟล์ Excel',
         'button': '🚀 เริ่มแปลง',
+        'clear_button': '🗑️ ล้างไฟล์ทั้งหมด',
         'spinner': 'กำลังแปลงที่ {scale}%…',
         'success': '✅ เสร็จสิ้น สร้าง PDF ทั้งหมด {count} ไฟล์',
         'download': '⬇️ ดาวน์โหลด ZIP',
@@ -51,7 +54,7 @@ LANG = {
 # ==================== 页面配置 ====================
 st.set_page_config(page_title='Excel to A4 PDF', layout='centered')
 
-# ==================== 水印样式 ====================
+# ==================== 水印 ====================
 st.markdown("""
 <style>
 .watermark {
@@ -67,7 +70,7 @@ st.markdown("""
 <div class="watermark">MADEBYCX</div>
 """, unsafe_allow_html=True)
 
-# ==================== 核心功能（不变） ====================
+# ==================== 核心功能 ====================
 def apply_fixed_scaling(workbook, scale_percent):
     for ws in workbook.worksheets:
         if ws.row_breaks:
@@ -144,12 +147,24 @@ scale = st.number_input(
     help=t['scale_help']
 )
 
+# ---------- 文件上传（带清除功能） ----------
+if 'clear_counter' not in st.session_state:
+    st.session_state.clear_counter = 0
+
+# 清除按钮：点击后递增计数器，从而改变 file_uploader 的 key，清空文件列表
+if st.button(t['clear_button']):
+    st.session_state.clear_counter += 1
+    st.rerun()
+
+# file_uploader 的 key 随计数器变化，实现清空
 uploaded_files = st.file_uploader(
     t['upload_label'],
     type=['xlsx', 'xls'],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key=f"file_uploader_{st.session_state.clear_counter}"
 )
 
+# ---------- 转换 ----------
 if uploaded_files and st.button(t['button']):
     with st.spinner(t['spinner'].format(scale=scale)):
         zip_buf = io.BytesIO()
