@@ -9,6 +9,9 @@ LANG = {
         'desc': '每个 Excel 生成一个 PDF，内容居中，所有列缩放至一页。',
         'scale_label': '缩放比例 (%)',
         'scale_help': '输入 30-100，表格越宽数值越小',
+        'orientation_label': '页面方向',
+        'orientation_portrait': '纵向',
+        'orientation_landscape': '横向',
         'upload_label': '选择 Excel 文件',
         'button': '🚀 开始转换',
         'clear_button': '🗑️ 一键清除所有文件',
@@ -24,6 +27,9 @@ LANG = {
         'desc': 'Each Excel generates one PDF, content centered, all columns scaled to one page.',
         'scale_label': 'Scale (%)',
         'scale_help': 'Enter 30-100, smaller for wider sheets',
+        'orientation_label': 'Orientation',
+        'orientation_portrait': 'Portrait',
+        'orientation_landscape': 'Landscape',
         'upload_label': 'Choose Excel files',
         'button': '🚀 Convert',
         'clear_button': '🗑️ Clear All Files',
@@ -39,6 +45,9 @@ LANG = {
         'desc': 'แต่ละไฟล์ Excel สร้าง PDF หนึ่งไฟล์ จัดกึ่งกลาง คอลัมน์ทั้งหมดอยู่ในหนึ่งหน้า',
         'scale_label': 'เปอร์เซ็นต์การย่อ (%)',
         'scale_help': 'ป้อน 30-100, ตารางกว้างใช้ค่าน้อย',
+        'orientation_label': 'การวางหน้ากระดาษ',
+        'orientation_portrait': 'แนวตั้ง',
+        'orientation_landscape': 'แนวนอน',
         'upload_label': 'เลือกไฟล์ Excel',
         'button': '🚀 เริ่มแปลง',
         'clear_button': '🗑️ ล้างไฟล์ทั้งหมด',
@@ -71,13 +80,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================== 核心功能 ====================
-def apply_fixed_scaling(workbook, scale_percent):
+def apply_fixed_scaling(workbook, scale_percent, orientation):
+    """固定缩放 + 居中 + 页面方向 + 窄边距"""
     for ws in workbook.worksheets:
+        # 清除分页符
         if ws.row_breaks:
             ws.row_breaks.break_list.clear()
         if ws.col_breaks:
             ws.col_breaks.break_list.clear()
 
+        # 页边距
         ws.page_margins.left = 0.3
         ws.page_margins.right = 0.3
         ws.page_margins.top = 0.3
@@ -85,10 +97,17 @@ def apply_fixed_scaling(workbook, scale_percent):
         ws.page_margins.header = 0.0
         ws.page_margins.footer = 0.0
 
+        # 居中
         ws.page_setup.horizontalCentered = True
         ws.page_setup.verticalCentered = True
+
+        # 纸张 A4
         ws.page_setup.paperSize = 9
 
+        # 页面方向：portrait / landscape
+        ws.page_setup.orientation = orientation
+
+        # 固定缩放（关闭自适应）
         ws.page_setup.fitToWidth = 0
         ws.page_setup.fitToHeight = 0
         ws.page_setup.scale = scale_percent
@@ -104,13 +123,13 @@ def get_soffice_path():
             return p
     return None
 
-def convert_with_libreoffice(file_bytes, base_name, scale):
+def convert_with_libreoffice(file_bytes, base_name, scale, orientation):
     soffice = get_soffice_path()
     if not soffice:
         raise RuntimeError(LANG[lang]['libre_error'])
 
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    apply_fixed_scaling(wb, scale)
+    apply_fixed_scaling(wb, scale, orientation)
     modified_bytes = io.BytesIO()
     wb.save(modified_bytes)
     wb.close()
@@ -138,6 +157,7 @@ t = LANG[lang]
 st.title(t['title'])
 st.markdown(t['desc'])
 
+# 缩放比例输入
 scale = st.number_input(
     t['scale_label'],
     min_value=30,
@@ -147,16 +167,22 @@ scale = st.number_input(
     help=t['scale_help']
 )
 
-# ---------- 文件上传（带清除功能） ----------
+# 页面方向选择
+orientation = st.radio(
+    t['orientation_label'],
+    options=['portrait', 'landscape'],
+    index=0,
+    format_func=lambda x: t['orientation_portrait'] if x == 'portrait' else t['orientation_landscape']
+)
+
+# 文件上传（带清除功能）
 if 'clear_counter' not in st.session_state:
     st.session_state.clear_counter = 0
 
-# 清除按钮：点击后递增计数器，从而改变 file_uploader 的 key，清空文件列表
 if st.button(t['clear_button']):
     st.session_state.clear_counter += 1
     st.rerun()
 
-# file_uploader 的 key 随计数器变化，实现清空
 uploaded_files = st.file_uploader(
     t['upload_label'],
     type=['xlsx', 'xls'],
@@ -164,7 +190,7 @@ uploaded_files = st.file_uploader(
     key=f"file_uploader_{st.session_state.clear_counter}"
 )
 
-# ---------- 转换 ----------
+# 转换
 if uploaded_files and st.button(t['button']):
     with st.spinner(t['spinner'].format(scale=scale)):
         zip_buf = io.BytesIO()
@@ -174,7 +200,7 @@ if uploaded_files and st.button(t['button']):
                 try:
                     raw = f.read()
                     name_no_ext = os.path.splitext(f.name)[0]
-                    pdf_bytes = convert_with_libreoffice(raw, name_no_ext, scale)
+                    pdf_bytes = convert_with_libreoffice(raw, name_no_ext, scale, orientation)
                     zf.writestr(f'{name_no_ext}.pdf', pdf_bytes)
                     total_pdfs += 1
                 except Exception as e:
